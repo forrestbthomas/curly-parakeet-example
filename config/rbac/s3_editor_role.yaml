@@ -1,0 +1,31 @@
+# permissions for end users to edit s3s.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: s3-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: curly-parakeet-example
+    app.kubernetes.io/part-of: curly-parakeet-example
+    app.kubernetes.io/managed-by: kustomize
+  name: s3-editor-role
+rules:
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - s3s
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - s3s/status
+  verbs:
+  - get

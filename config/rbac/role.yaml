@@ -1,0 +1,85 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: manager-role
+rules:
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - infrastructures
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - infrastructures/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - infrastructures/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - products
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - products/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - products/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - s3s
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - s3s/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tbd.github.com
+  resources:
+  - s3s/status
+  verbs:
+  - get
+  - patch
+  - update
