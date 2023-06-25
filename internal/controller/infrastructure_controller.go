@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,17 +58,19 @@ func (r *InfrastructureReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	log.Info("should create the relevant child Infra CRs - like S3", "service type", infra.Spec.ServiceType)
-	if err := r.Client.Create(ctx, &tbdv1.S3{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("%s-", req.Name),
-			Namespace:    req.Namespace,
-		},
-		Spec: tbdv1.S3Spec{
-			BucketName: "mycustombucket",
-		},
-	}); err != nil {
-		log.Error(err, "could not create S3 custom resource")
-	}
+	/*
+		if err := r.Client.Create(ctx, &tbdv1.S3{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: fmt.Sprintf("%s-", req.Name),
+				Namespace:    req.Namespace,
+			},
+			Spec: tbdv1.S3Spec{
+				BucketName: "mycustombucket",
+			},
+		}); err != nil {
+			log.Error(err, "could not create S3 custom resource")
+		}
+	*/
 
 	return ctrl.Result{}, nil
 }

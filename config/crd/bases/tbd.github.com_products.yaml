@@ -34,28 +34,17 @@ spec:
             type: object
           spec:
             description: ProductSpec defines the desired state of Product
+            properties:
+              useCase:
+                type: string
+            required:
+            - useCase
             type: object
           status:
             description: ProductStatus defines the observed state of Product
             properties:
               condition:
-                properties:
-                  containerOrchestration:
-                    type: string
-                  infrastructure:
-                    type: string
-                required:
-                - containerOrchestration
-                - infrastructure
-                type: object
-              observedContainerOrchestraion:
                 type: string
-              observedInfrastructure:
-                type: string
-            required:
-            - condition
-            - observedContainerOrchestraion
-            - observedInfrastructure
             type: object
         type: object
     served: true

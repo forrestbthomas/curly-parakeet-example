@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	Running = "Running"
-	Failed  = "Failed"
-	Healthy = "Healthy"
+	Creating  Condition = "Creating"
+	Completed Condition = "Completed"
+	Failed    Condition = "Failed"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -31,21 +31,15 @@ const (
 
 // ProductSpec defines the desired state of Product
 type ProductSpec struct {
-	// ContainerOrchestration ContainerOrchestration `json:"containerOrchestration,omitempty"`
-	// Infrastructure         Infrastructure         `json:"infrastructure,omitempty"`
+	UseCase string `json:"useCase"`
 }
 
 // ProductStatus defines the observed state of Product
 type ProductStatus struct {
-	ObservedContainerOrchestration string    `json:"observedContainerOrchestraion"`
-	ObservedInfrasturcture         string    `json:"observedInfrastructure"`
-	Condition                      Condition `json:"condition"`
+	Condition Condition `json:"condition,omitempty"`
 }
 
-type Condition struct {
-	ContainerOrchestration string `json:"containerOrchestration"`
-	Infrastructure         string `json:"infrastructure"`
-}
+type Condition string
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status

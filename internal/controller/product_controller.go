@@ -18,25 +18,23 @@ package controller
 
 import (
 	"context"
-	"crypto"
-	"encoding/json"
-	"fmt"
+	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	logging "sigs.k8s.io/controller-runtime/pkg/log"
 
 	tbdv1 "github.com/curly-parakeet-example/api/v1"
+	"github.com/curly-parakeet-example/pkg/util"
 )
 
 // ProductReconciler reconciles a Product object
 type ProductReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	req    ctrl.Request
+	ctx    context.Context
 }
 
 //+kubebuilder:rbac:groups=tbd.github.com,resources=products,verbs=get;list;watch;create;update;patch;delete
@@ -55,6 +53,8 @@ type ProductReconciler struct {
 func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logging.FromContext(ctx)
 	log.Info("reconciling product", "name", req.Name)
+	r.ctx = ctx
+	r.req = req
 
 	// get actual product CR
 	var product tbdv1.Product
@@ -63,57 +63,150 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.Client.Create(ctx, &tbdv1.Infrastructure{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("%s-", req.Name),
-			Namespace:    req.Namespace,
+	// when would updates occur for a Product CR? the only spec field is useCase and that wouldn't change
+	// there will also be a hash of dependent specs, and that can change
+	// that means that we want the product controller to get the spec of the downstream objects and hash it and then compare that to the hash in the product spec
+	// the issue with that is that the controller will now be updating the spec, and that's not good
+	// i think what this means is that the only thing in the product spec should be the use case - if the use case changes, then that should be rejected, the only operation on a Product should be create/delete
+	// downstream specs should be hashed and bubbled as a status field in the product CR
+	// this way a human operator is required to delete a product, which would in turn delete downstream objects, via a finalizer
+
+	// Product Controller Responsibility - create/update/delete CRs that own the low-level objects for products
+	// check if the object is a product, or an infra or a container cr
+	// if product:
+	// - if new, create then update status and return (it is new if the Status section is nil)
+	// - if exists, check statuses,top level fields of downstream object name, the value being an object with fields of Phase and Hash,
+	//   - if hash has changed, update and return
+	//   - if Phase has changed, update and return (might be different depending on what the Phase is)
+
+	/*
+
+			DAG
+
+			                                   isNew
+		                                     │
+		                               Yes   │ No
+		      Out    ◄────── SetStatus  ◄───────┴──────►  CheckStatus
+		                                                 │    │
+		                                                 │    │
+		                                                 │    │
+		                                                 │    │
+		                                    ProductStatus│    │DownstreamStatus
+		                                                 │    │
+		                           No                    │    │                 No
+		                   Out   ◄────────hasChanged  ◄──┘    └──►  hasChanged ───────►  Out
+		                                      │                          │
+		                                      │                          │
+		                                  Yes │                          │
+		                                      │                          │
+		                       │ ◄────────────┤            ◄───────┬─────┴─────┬─────────►
+		                       │   Creating   │                    │           │
+		                       │              │              Infra │           │Container
+		            setStatus  │              │                    │           │
+		Out     ◄──────────────┤ ◄────────────┤                    │           │
+		                       │  Completed   │         Creating   │           │Creating
+		                       │              │       │    ◄───────┤           ├────────►  │
+		                       │              │       │            │           │           │
+		                       │ ◄────────────┘       │ Completed  │           │Completed  │
+		                          Failed              │    ◄───────┤           ├────────►  │
+		                            │                 │            │           │           │
+		                            │                 │ Failed     │           │Failed     │ setStatus
+		                            │                 │    ◄───────┤           ├────────►  │
+		                            │                 │            │           │           │
+		                            │                 │            │           │           │
+		                            ▼                 │            │           │           └───────────►   Out
+		                        Alert         setStatus            │           │
+		                                              │            │           │
+		                                              │            ▼           ▼
+		                                              │
+		                                              │          Alert        Alert
+		                                              │
+		                           Out    ◄───────────┘
+
+	*/
+
+	foldFn := func(acc util.ReconcileAccumulator, next util.ReconcilerFn) (ctrl.Result, error, bool) {
+		if acc.Exit {
+			return acc.Result, acc.Err, true
+		}
+
+		return next()
+	}
+
+	result := util.ReconcilerFoldl(
+		[]util.ReconcilerFn{
+			r.isNew,
+			r.setStatus,
 		},
-		Spec:   tbdv1.InfrastructureSpec{ServiceType: "objectStorage"},
-		Status: tbdv1.InfrastructureStatus{},
-	}); err != nil {
-		log.Error(err, "could not create S3 custom resource")
+		foldFn,
+		util.ReconcileAccumulator{},
+	)
+
+	return result.Result, result.Err
+}
+
+func (r *ProductReconciler) isNew() (ctrl.Result, error, bool) {
+	log := logging.FromContext(r.ctx)
+	product, err := util.GetProduct(r.ctx, r.Client, r.req)
+	if err != nil {
+		log.Error(err, "error getting product")
+		return ctrl.Result{}, err, true
 	}
 
-	return r.reconcileProduct(ctx, product)
-
-}
-
-func (r *ProductReconciler) reconcileProduct(ctx context.Context, product tbdv1.Product) (ctrl.Result, error) {
-	err := errors.AggregateGoroutines(r.reconcileContainerOrchestration(ctx, product), r.reconcileInfrastructure(ctx, product))
-	return ctrl.Result{}, err
-
-}
-
-func (r *ProductReconciler) reconcileContainerOrchestration(ctx context.Context, product tbdv1.Product) func() error {
-	logging := log.FromContext(ctx)
-	return func() (err error) {
-		if product.Status.ObservedContainerOrchestration == "" {
-			// create Container Orchestration CR and return nil or err
-			logging.Info("would create a container orchestration CR")
-			return
-		}
-
-		desiredContainerOrchestration, err := r.hash(product)
-		if err != nil {
-			return err
-		}
-
-		if product.Status.ObservedContainerOrchestration != desiredContainerOrchestration {
-			// update product Status and return nil or err
-			logging.Info("would update product status and return")
-			return
-		}
-
-		return
+	if product.Status.Condition == "" {
+		log.Info("product is new will set status to Creating", "product", product.Name)
 	}
+
+	return ctrl.Result{}, nil, false
 }
 
-func (r *ProductReconciler) reconcileInfrastructure(ctx context.Context, product tbdv1.Product) func() error {
-	logging := log.FromContext(ctx)
+func (r *ProductReconciler) setStatus() (ctrl.Result, error, bool) {
+	log := logging.FromContext(r.ctx)
+
+	product, err := util.GetProduct(r.ctx, r.Client, r.req)
+	if err != nil {
+		log.Error(err, "error getting product before setting status")
+		return ctrl.Result{}, err, true
+	}
+
+	product.Status = tbdv1.ProductStatus{
+		Condition: tbdv1.Creating,
+	}
+
+	err = r.Client.Status().Update(r.ctx, &product)
+	if err != nil {
+		log.Error(err, "error setting status", "product", product)
+		return ctrl.Result{
+			RequeueAfter: 1 * time.Minute,
+		}, err, true
+	}
+
+	log.Info("product status was set successfully")
+
+	return ctrl.Result{}, nil, false
+}
+
+/*
+func (r *ProductReconciler) reconcileContainerOrchestration(ctx context.Context, product tbdv1.Product, req ctrl.Request) func() error {
+}
+
+func (r *ProductReconciler) reconcileInfrastructure(ctx context.Context, product tbdv1.Product, req ctrl.Request) func() error {
+	log := logging.FromContext(ctx)
 	return func() (err error) {
-		if product.Status.ObservedInfrasturcture == "" {
-			// create Infrastructure CR and return nil or err
-			logging.Info("would create an infra CR")
+
+		if product.Status.ObservedInfrastructure == "" {
+			log.Info("would create an infra CR")
+			if err := r.Client.Create(ctx, &tbdv1.Infrastructure{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: fmt.Sprintf("%s-", req.Name),
+					Namespace:    req.Namespace,
+				},
+				Spec: tbdv1.InfrastructureSpec{ServiceType: "objectStorage"},
+			}); err != nil {
+				log.Error(err, "could not create S3 custom resource")
+				return err
+			}
+
 		}
 
 		desiredInfrastructure, err := r.hash(product)
@@ -121,9 +214,9 @@ func (r *ProductReconciler) reconcileInfrastructure(ctx context.Context, product
 			return err
 		}
 
-		if product.Status.ObservedInfrasturcture != desiredInfrastructure {
+		if product.Status.ObservedInfrastructure != desiredInfrastructure {
 			// update product Status and return nil or err
-			logging.Info("would update product status and return")
+			log.Info("would update product status and return")
 		}
 
 		return
@@ -144,6 +237,7 @@ func (r *ProductReconciler) hash(product tbdv1.Product) (s string, err error) {
 
 	return string(hash.Sum(nil)), nil
 }
+*/
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProductReconciler) SetupWithManager(mgr ctrl.Manager) error {

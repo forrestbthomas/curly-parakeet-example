@@ -8,4 +8,6 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: curly-parakeet-example
   name: product-sample
+  namespace: products
 spec:
+  useCase: static-site
