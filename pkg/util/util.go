@@ -28,8 +28,8 @@ type ReconcilerTask struct {
 	Name      ReconcilerTaskName
 }
 
-type ReconcilerFn func() (ctrl.Result, error, bool)
-type ReconcilerPredicate func() (bool, error)
+type ReconcilerFn func(ctx context.Context, client client.Client, req ctrl.Request) (ctrl.Result, error, bool)
+type ReconcilerPredicate func(ctx context.Context, client client.Client, req ctrl.Request) (bool, error)
 type ReconcilerTaskName string
 
 func ReconcilerFoldl(tasks map[ReconcilerTaskName]ReconcilerTask, foldFn func(ReconcileAccumulator, ReconcilerTask) ReconcileAccumulator, init ReconcileAccumulator) ReconcileAccumulator {

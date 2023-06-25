@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,6 +25,7 @@ import (
 	logging "sigs.k8s.io/controller-runtime/pkg/log"
 
 	tbdv1 "github.com/curly-parakeet-example/api/v1"
+	"github.com/curly-parakeet-example/pkg/tasks"
 	"github.com/curly-parakeet-example/pkg/util"
 )
 
@@ -71,7 +71,7 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// downstream specs should be hashed and bubbled as a status field in the product CR
 	// this way a human operator is required to delete a product, which would in turn delete downstream objects, via a finalizer
 
-	// Product Controller Responsibility - create/update/delete CRs that own the low-level objects for products
+	// Product Controller Responsibility - create CRs that own the low-level objects for products (delete only via Finalizers), create/update Product Status
 	// check if the object is a product, or an infra or a container cr
 	// if product:
 	// - if new, create then update status and return (it is new if the Status section is nil)
@@ -125,18 +125,19 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	*/
 
+	// TODO: provide this as a default `fold` in the lib, but allow providing custom - hint: interfaces are hot
 	foldFn := func(acc util.ReconcileAccumulator, nextTask util.ReconcilerTask) util.ReconcileAccumulator {
 		var result ctrl.Result
 		var err error
 		var exit bool
-		ok, err := nextTask.Predicate()
+		ok, err := nextTask.Predicate(ctx, r.Client, req)
 		if err != nil {
 			acc.Err = err
 			return acc
 		}
 
 		if ok {
-			result, err, exit = nextTask.Fn()
+			result, err, exit = nextTask.Fn(ctx, r.Client, req)
 			acc.Result = result
 			acc.Err = err
 			acc.Exit = exit
@@ -147,90 +148,12 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// folding instead of mapping so that we can track state in the accumulator
 	result := util.ReconcilerFoldl(
-		map[util.ReconcilerTaskName]util.ReconcilerTask{
-
-			util.Input: {
-				Name:      util.Input,
-				Fn:        r.setStatusWith(tbdv1.Creating),
-				Predicate: r.isNew,
-				Next: []util.ReconcilerTaskName{
-					util.CheckStatus,
-				},
-			},
-
-			util.CheckStatus: {
-				Name:      util.CheckStatus,
-				Fn:        r.checkStatus,
-				Predicate: r.passThrough,
-			},
-		},
+		tasks.Pipeline,
 		foldFn,
 		util.ReconcileAccumulator{},
 	)
 
 	return result.Result, result.Err
-}
-
-func (r *ProductReconciler) passThrough() (bool, error) {
-	return true, nil
-}
-
-func (r *ProductReconciler) isNew() (bool, error) {
-	log := logging.FromContext(r.ctx)
-	product, err := util.GetProduct(r.ctx, r.Client, r.req)
-	if err != nil {
-		log.Error(err, "error getting product")
-		return false, err
-	}
-
-	if product.Status.Condition == "" {
-		log.Info("product is new will set status to Creating", "product", product.Name)
-		return true, nil
-	}
-
-	return false, err
-}
-
-func (r *ProductReconciler) setStatusWith(status tbdv1.Condition) func() (ctrl.Result, error, bool) {
-	log := logging.FromContext(r.ctx)
-
-	return func() (ctrl.Result, error, bool) {
-		product, err := util.GetProduct(r.ctx, r.Client, r.req)
-		if err != nil {
-			log.Error(err, "error getting product before setting status")
-			return ctrl.Result{}, err, true
-		}
-
-		product.Status = tbdv1.ProductStatus{
-			Condition: status,
-		}
-
-		err = r.Client.Status().Update(r.ctx, &product)
-		if err != nil {
-			log.Error(err, "error setting status", "product", product)
-			return ctrl.Result{
-				RequeueAfter: 1 * time.Minute,
-			}, err, true
-		}
-
-		log.Info("product status was set successfully")
-
-		return ctrl.Result{}, nil, false
-	}
-}
-
-func (r *ProductReconciler) checkStatus() (ctrl.Result, error, bool) {
-	log := logging.FromContext(r.ctx)
-
-	product, err := util.GetProduct(r.ctx, r.Client, r.req)
-	if err != nil {
-		log.Error(err, "error getting product before setting status")
-		return ctrl.Result{}, err, true
-	}
-
-	log.Info("retrieved product status", "status", product.Status.Condition)
-	return ctrl.Result{}, nil, true
-
 }
 
 // SetupWithManager sets up the controller with the Manager.
