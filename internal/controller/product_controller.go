@@ -125,18 +125,44 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	*/
 
-	foldFn := func(acc util.ReconcileAccumulator, next util.ReconcilerFn) (ctrl.Result, error, bool) {
-		if acc.Exit {
-			return acc.Result, acc.Err, true
+	foldFn := func(acc util.ReconcileAccumulator, nextTask util.ReconcilerTask) util.ReconcileAccumulator {
+		var result ctrl.Result
+		var err error
+		var exit bool
+		ok, err := nextTask.Predicate()
+		if err != nil {
+			acc.Err = err
+			return acc
 		}
 
-		return next()
+		if ok {
+			result, err, exit = nextTask.Fn()
+			acc.Result = result
+			acc.Err = err
+			acc.Exit = exit
+		}
+
+		return acc
 	}
 
+	// folding instead of mapping so that we can track state in the accumulator
 	result := util.ReconcilerFoldl(
-		[]util.ReconcilerFn{
-			r.isNew,
-			r.setStatus,
+		map[util.ReconcilerTaskName]util.ReconcilerTask{
+
+			util.Input: {
+				Name:      util.Input,
+				Fn:        r.setStatusWith(tbdv1.Creating),
+				Predicate: r.isNew,
+				Next: []util.ReconcilerTaskName{
+					util.CheckStatus,
+				},
+			},
+
+			util.CheckStatus: {
+				Name:      util.CheckStatus,
+				Fn:        r.checkStatus,
+				Predicate: r.passThrough,
+			},
 		},
 		foldFn,
 		util.ReconcileAccumulator{},
@@ -145,22 +171,55 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return result.Result, result.Err
 }
 
-func (r *ProductReconciler) isNew() (ctrl.Result, error, bool) {
+func (r *ProductReconciler) passThrough() (bool, error) {
+	return true, nil
+}
+
+func (r *ProductReconciler) isNew() (bool, error) {
 	log := logging.FromContext(r.ctx)
 	product, err := util.GetProduct(r.ctx, r.Client, r.req)
 	if err != nil {
 		log.Error(err, "error getting product")
-		return ctrl.Result{}, err, true
+		return false, err
 	}
 
 	if product.Status.Condition == "" {
 		log.Info("product is new will set status to Creating", "product", product.Name)
+		return true, nil
 	}
 
-	return ctrl.Result{}, nil, false
+	return false, err
 }
 
-func (r *ProductReconciler) setStatus() (ctrl.Result, error, bool) {
+func (r *ProductReconciler) setStatusWith(status tbdv1.Condition) func() (ctrl.Result, error, bool) {
+	log := logging.FromContext(r.ctx)
+
+	return func() (ctrl.Result, error, bool) {
+		product, err := util.GetProduct(r.ctx, r.Client, r.req)
+		if err != nil {
+			log.Error(err, "error getting product before setting status")
+			return ctrl.Result{}, err, true
+		}
+
+		product.Status = tbdv1.ProductStatus{
+			Condition: status,
+		}
+
+		err = r.Client.Status().Update(r.ctx, &product)
+		if err != nil {
+			log.Error(err, "error setting status", "product", product)
+			return ctrl.Result{
+				RequeueAfter: 1 * time.Minute,
+			}, err, true
+		}
+
+		log.Info("product status was set successfully")
+
+		return ctrl.Result{}, nil, false
+	}
+}
+
+func (r *ProductReconciler) checkStatus() (ctrl.Result, error, bool) {
 	log := logging.FromContext(r.ctx)
 
 	product, err := util.GetProduct(r.ctx, r.Client, r.req)
@@ -169,75 +228,10 @@ func (r *ProductReconciler) setStatus() (ctrl.Result, error, bool) {
 		return ctrl.Result{}, err, true
 	}
 
-	product.Status = tbdv1.ProductStatus{
-		Condition: tbdv1.Creating,
-	}
+	log.Info("retrieved product status", "status", product.Status.Condition)
+	return ctrl.Result{}, nil, true
 
-	err = r.Client.Status().Update(r.ctx, &product)
-	if err != nil {
-		log.Error(err, "error setting status", "product", product)
-		return ctrl.Result{
-			RequeueAfter: 1 * time.Minute,
-		}, err, true
-	}
-
-	log.Info("product status was set successfully")
-
-	return ctrl.Result{}, nil, false
 }
-
-/*
-func (r *ProductReconciler) reconcileContainerOrchestration(ctx context.Context, product tbdv1.Product, req ctrl.Request) func() error {
-}
-
-func (r *ProductReconciler) reconcileInfrastructure(ctx context.Context, product tbdv1.Product, req ctrl.Request) func() error {
-	log := logging.FromContext(ctx)
-	return func() (err error) {
-
-		if product.Status.ObservedInfrastructure == "" {
-			log.Info("would create an infra CR")
-			if err := r.Client.Create(ctx, &tbdv1.Infrastructure{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: fmt.Sprintf("%s-", req.Name),
-					Namespace:    req.Namespace,
-				},
-				Spec: tbdv1.InfrastructureSpec{ServiceType: "objectStorage"},
-			}); err != nil {
-				log.Error(err, "could not create S3 custom resource")
-				return err
-			}
-
-		}
-
-		desiredInfrastructure, err := r.hash(product)
-		if err != nil {
-			return err
-		}
-
-		if product.Status.ObservedInfrastructure != desiredInfrastructure {
-			// update product Status and return nil or err
-			log.Info("would update product status and return")
-		}
-
-		return
-	}
-}
-
-func (r *ProductReconciler) hash(product tbdv1.Product) (s string, err error) {
-	statusJson, err := json.Marshal(product)
-	if err != nil {
-		return "", err
-	}
-
-	hash := crypto.MD5.New()
-	_, err = hash.Write(statusJson)
-	if err != nil {
-		return "", err
-	}
-
-	return string(hash.Sum(nil)), nil
-}
-*/
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProductReconciler) SetupWithManager(mgr ctrl.Manager) error {

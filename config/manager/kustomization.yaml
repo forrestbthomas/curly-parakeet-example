@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: forrestthomas/curly-parakeet-example
-  newTag: "11"
+  newTag: "1"
