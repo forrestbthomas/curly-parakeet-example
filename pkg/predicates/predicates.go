@@ -25,6 +25,7 @@ func IsNew(ctx context.Context, client client.Client, req ctrl.Request) (bool, e
 		log.Info("product is new will set status to Creating", "product", product.Name)
 		return true, nil
 	}
+	log.Info("pre-existing product, no-op", "product", product.Name)
 
 	return false, err
 }
