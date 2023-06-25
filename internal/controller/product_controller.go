@@ -127,6 +127,10 @@ func (r *ProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// TODO: provide this as a default `fold` in the lib, but allow providing custom - hint: interfaces are hot
 	foldFn := func(acc util.ReconcileAccumulator, nextTask util.ReconcilerTask) util.ReconcileAccumulator {
+		if acc.Exit {
+			return acc
+		}
+
 		var result ctrl.Result
 		var err error
 		var exit bool

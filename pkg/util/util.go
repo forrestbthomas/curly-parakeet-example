@@ -2,7 +2,7 @@ package util
 
 import (
 	"context"
-	"sync"
+	"fmt"
 
 	tbdv1 "github.com/curly-parakeet-example/api/v1"
 	errors "k8s.io/apimachinery/pkg/util/errors"
@@ -36,7 +36,8 @@ type ReconcilerPipeline map[ReconcilerTaskName]ReconcilerTask
 type ReconcilerTaskName string
 
 func ReconcilerFoldl(tasks ReconcilerPipeline, foldFn func(ReconcileAccumulator, ReconcilerTask) ReconcileAccumulator, init ReconcileAccumulator) ReconcileAccumulator {
-	var wg sync.WaitGroup
+	fmt.Println("*****")
+	fmt.Println("FOLDING")
 
 	nextTaskName := init.TaskToRun
 	if nextTaskName == "" {
@@ -45,24 +46,25 @@ func ReconcilerFoldl(tasks ReconcilerPipeline, foldFn func(ReconcileAccumulator,
 
 	nextTask := tasks[nextTaskName]
 	init = foldFn(init, nextTask)
+	out := init
 
-	initCh := make(chan ReconcileAccumulator, len(nextTask.Next))
-	wg.Add(len(nextTask.Next))
-	for _, taskName := range nextTask.Next {
-		go func(w *sync.WaitGroup, ch chan ReconcileAccumulator, t ReconcilerTaskName, ts ReconcilerPipeline) {
-			init.TaskToRun = t
-			ch <- foldFn(init, ts[t])
-			w.Done()
-		}(&wg, initCh, taskName, tasks)
+	if len(nextTask.Next) > 0 {
+		initCh := make(chan ReconcileAccumulator, len(nextTask.Next))
+		for _, taskName := range nextTask.Next {
+			go func(ch chan ReconcileAccumulator, t ReconcilerTaskName, ts ReconcilerPipeline) {
+				init.TaskToRun = t
+				ch <- foldFn(init, ts[t])
+				close(ch)
+			}(initCh, taskName, tasks)
+		}
+
+		for next := range initCh {
+			out = mergeAccumulators(next, out)
+		}
 	}
 
-	wg.Wait()
-	var out ReconcileAccumulator
-	prev := init
-	for out = range initCh {
-		out = mergeAccumulators(prev, out)
-		prev = out
-	}
+	fmt.Println("FOLDED")
+	fmt.Println("*****")
 	return out
 }
 
